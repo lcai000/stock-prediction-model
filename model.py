@@ -4,20 +4,27 @@ import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 #fetch historical stock data
 stock_symbol = 'AAPL'
 data = yf.download(stock_symbol, start='2010-01-01', end='2024-11-30')
 #display data
 print(data.head())
+print(data.shape)
 
 #data preprocessing
 data.fillna(method='ffill', inplace=True)
 
+train_size = int(len(data) * 0.8)
+data_train, data_test = data[:train_size], data[train_size:]
+
 # Normalize data
-scaler = MinMaxScaler(feature_range=(0, 1))
-scaled_data = scaler.fit_transform(data[['Open', 'High', 'Low', 'Close', 'Volume']])
+# scaler = MinMaxScaler(feature_range=(0, 1))
+scaler = StandardScaler()
+data_scaled_train = scaler.fit_transform(data_train[['Open', 'High', 'Low', 'Close', 'Volume']])
+scaled_data = scaler.transform(data[['Open', 'High', 'Low', 'Close', 'Volume']])
+# scaled_data = scaler.fit_transform(data[['Open', 'High', 'Low', 'Close', 'Volume']])
 
 # Create a DataFrame from scaled data
 scaled_df = pd.DataFrame(scaled_data, columns=['Open', 'High', 'Low', 'Close', 'Volume'])
@@ -35,6 +42,17 @@ y = scaled_df['Next_Close'].values  # Ensure alignment after dropna()
 train_size = int(len(X) * 0.8)
 X_train, X_test = X[:train_size], X[train_size:]
 y_train, y_test = y[:train_size], y[train_size:]
+print("original data around train-test split")
+print(data[train_size-5: train_size+5])
+print("scaled data around train-test split")
+print(scaled_df[train_size-5: train_size+5])
+
+print("training data")
+print(X_train[10])
+print(y_train[10])
+
+#end program
+input("Press Enter to continue...")
 
 # Convert to PyTorch tensors
 X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
@@ -61,11 +79,16 @@ class StockPredictor(nn.Module):
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(hidden_size, output_size)
+        #layer normalization
+        self.ln1 = nn.LayerNorm(hidden_size)
+        self.ln2 = nn.LayerNorm(output_size)
 
     def forward(self, x):
         x = self.fc1(x)
+        # x = self.ln1(x)
         x = self.relu(x)
         x = self.fc2(x)
+        # x = self.ln2(x)
         return x
 
 # Model parameters
