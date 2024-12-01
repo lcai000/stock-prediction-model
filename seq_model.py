@@ -1,13 +1,15 @@
 import torch
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 import yfinance as yf
 
+WINDOW_SIZE = 60
+
 class StockDataset:
-    def __init__(self, data, window_size=30, predict_size=1):
+    def __init__(self, data, window_size=WINDOW_SIZE, predict_size=1):
         """
         Prepare sequential data for stock price prediction
         
@@ -31,7 +33,8 @@ class StockDataset:
         self.X, self.y = self._create_sequences(scaled_data)
     
     def _get_scaler(self, data):
-        return StandardScaler()
+        # return StandardScaler()
+        return MinMaxScaler()
     
     def _create_sequences(self, data):
         """
@@ -76,6 +79,35 @@ class StockDataset:
         """
         return self.scaler.inverse_transform(predictions)
 
+    def print_samples(self, num_samples=5):
+        """
+        Print sample sequences and their corresponding targets from the dataset
+        
+        Parameters:
+        - stock_dataset: StockDataset instance
+        - num_samples: Number of samples to print
+        """
+        print("Dataset Sample Information:")
+        print(f"Total Sequences: {len(self.X)}")
+        print(f"Input Sequence Shape: {self.X.shape}")
+        print(f"Target Sequence Shape: {self.y.shape}")
+        
+        print("\nSample Sequences:")
+        for i in range(min(num_samples, len(self.X))):
+            print(f"\nSample {i+1}:")
+            
+            # Input sequence
+            print("Input Sequence (Last 5 time steps):")
+            input_seq = self.X[i][-5:]  # Last 5 time steps
+            input_seq_original = self.scaler.inverse_transform(input_seq)
+            
+            for j, value in enumerate(input_seq_original):
+                print(f"  Time step {j}: {value[0]:.2f}")
+            
+            # Target value
+            target_original = self.scaler.inverse_transform(self.y[i])
+            print(f"  Target Value: {target_original[0][0]:.2f}")
+
 # Example usage
 def prepare_stock_data(csv_path):
     # Load stock data
@@ -86,7 +118,7 @@ def prepare_stock_data(csv_path):
     data = df['Close'].values.reshape(-1, 1)
     
     # Create dataset
-    stock_dataset = StockDataset(data, window_size=30, predict_size=1)
+    stock_dataset = StockDataset(data, window_size=WINDOW_SIZE, predict_size=1)
     
     # Get DataLoader
     train_loader = stock_dataset.get_dataloader(batch_size=32)
@@ -125,31 +157,43 @@ class LSTMStockPredictor(torch.nn.Module):
 
 
 class MLPStockPredictor(torch.nn.Module):
-    def __init__(self, input_size=30, hidden_size1=64, hidden_size2=32, output_size=1):
+    def __init__(self, input_size=WINDOW_SIZE, hidden_sizes=[128, 64, 32], output_size=1):
         super().__init__()
-        self.model = torch.nn.Sequential(
-            # First hidden layer
-            torch.nn.Linear(input_size, hidden_size1),
-            torch.nn.ReLU(),
-            torch.nn.BatchNorm1d(hidden_size1),
-            torch.nn.Dropout(0.2),
+        
+        # Create list to store layers
+        layers = []
+        
+        # Input layer
+        prev_size = input_size
+        
+        # Dynamically create hidden layers
+        for hidden_size in hidden_sizes:
+            # Linear layer
+            layers.append(torch.nn.Linear(prev_size, hidden_size))
             
-            # Second hidden layer
-            torch.nn.Linear(hidden_size1, hidden_size2),
-            torch.nn.ReLU(),
-            torch.nn.BatchNorm1d(hidden_size2),
-            torch.nn.Dropout(0.2),
+            # ReLU activation
+            layers.append(torch.nn.ReLU())
             
-            # Output layer
-            torch.nn.Linear(hidden_size2, output_size)
-        )
+            # Layer Normalization
+            layers.append(torch.nn.LayerNorm(hidden_size))
+            
+            # Dropout
+            layers.append(torch.nn.Dropout(0.2))
+            
+            # Update previous size for next iteration
+            prev_size = hidden_size
+        
+        # Final output layer
+        layers.append(torch.nn.Linear(prev_size, output_size))
+        
+        # Create sequential model
+        self.model = torch.nn.Sequential(*layers)
     
     def forward(self, x):
         # Flatten the input if it's a sequence
         if len(x.shape) == 3:
             x = x.view(x.size(0), -1)
         return self.model(x)
-
 
 # Training function
 def train_model(model, train_loader, epochs=50, learning_rate=0.001):
@@ -173,7 +217,7 @@ def train_model(model, train_loader, epochs=50, learning_rate=0.001):
             print(f'Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}')
 
 
-def download_stock_data(ticker, start_date='2005-01-01', end_date=None):
+def download_stock_data(ticker, start_date='2015-01-01', end_date=None):
     """
     Download stock data from Yahoo Finance
     
@@ -208,9 +252,9 @@ def train_and_evaluate_model(
     stock_data, 
     ticker, 
     feature_column='Close', 
-    window_size=30, 
+    window_size=WINDOW_SIZE, 
     test_size=0.2, 
-    epochs=100, 
+    epochs=50, 
     learning_rate=0.001
 ):
     """
@@ -234,23 +278,24 @@ def train_and_evaluate_model(
     
     # Create dataset
     stock_dataset = StockDataset(data, window_size=window_size, predict_size=1)
+    stock_dataset.print_samples()
     
     # Split data into train and test
     X, y = stock_dataset.X, stock_dataset.y
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, shuffle=False
+        X, y, test_size=test_size, random_state=42, shuffle=False
     )
     
     # Create DataLoaders
     train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
     test_dataset = torch.utils.data.TensorDataset(X_test, y_test)
     
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=16, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=16, shuffle=False)
     
     # Initialize model
-    # model = LSTMStockPredictor(input_size=1, hidden_size=50, num_layers=2, output_size=1)
-    model = MLPStockPredictor()
+    model = LSTMStockPredictor(input_size=1, hidden_size=50, num_layers=2, output_size=1)
+    # model = MLPStockPredictor(input_size=WINDOW_SIZE)
     
     # Loss and Optimizer
     criterion = torch.nn.MSELoss()
@@ -342,7 +387,7 @@ def train_and_evaluate_model(
     }
 
 
-def predict_next_day(model, stock_data, window_size=30, feature_column='Close'):
+def predict_next_day(model, stock_data, window_size=WINDOW_SIZE, feature_column='Close'):
     """
     Predict the next day's stock price
     
@@ -396,7 +441,7 @@ def main(ticker='AAPL'):
         print(f"\nPredicted {ticker} Stock Price for Next Day: ${next_day_price:.2f}")
         
         # Compare with last known price
-        last_price = float(stock_data['Close'].iloc[-1])
+        last_price = float(stock_data['Close'].iloc[-1].iloc[0])
         print(f"Last Known Price: ${last_price:.2f}")
         
         # Calculate predicted change
